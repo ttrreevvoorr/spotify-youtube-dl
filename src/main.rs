@@ -1,93 +1,69 @@
-//use base64;
 use reqwest::Client;
-//use reqwest::Client;
 use reqwest::header::{HeaderMap, HeaderValue, ACCEPT, ACCEPT_ENCODING, ACCEPT_LANGUAGE, USER_AGENT};
 use scraper::{Html, Selector};
 use serde_json::Value;
 use std::error::Error;
-use std::fs;
-use async_std::main;
+use tokio::main;
+use std::fs::File;
+use std::io::prelude::*;
+use std::process::Command;
+use rusty_ytdl::Video;
+use rusty_ytdl::{choose_format, VideoOptions, VideoQuality, VideoSearchOptions };
 
-//use duktape::{Context, Object};
-/*
-#[derive(Debug)]
-struct Track {
-  title: String,
-  artist: String,
-  //Option<album>: String,
-  //dOption<cover>: String
-}
-*/
-
-#[tokio::main]
-async fn main() -> Result<(), Box<dyn Error>> {
-    let url = "https://open.spotify.com/album/6hPkbAV3ZXpGZBGUvL6jVM"; // Replace with your desired Spotify URL
-    let page_data = get_spotify_data(&url).await?;
-    //println!("{:?}", page_data);
-
-    let page_tracks = get_tracks(&page_data);
-    //println!("{:?}", page_tracks);
-
-    let binding = &page_tracks.unwrap();
-    let track_data = get_track_data(binding).await;
-    println!("{:?}", &track_data);
- 
-    Ok(())
+struct Song {
+    title: String,
+    artist: String,
+    album: String,
+    url: String,
 }
 
-async fn get_spotify_data(url: &str) -> Result<Html,Box<dyn Error>> {
+fn create_headers() -> HeaderMap {
     let mut headers = HeaderMap::new();
     headers.insert(
         USER_AGENT,
         HeaderValue::from_static("Mozilla/5.0 (Macintosh; Intel Mac OS X x.y; rv:42.0) Gecko/20100101 Firefox/42.0")
     );
-    headers.insert(ACCEPT, HeaderValue::from_static("text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.9"));
-    //headers.insert(ACCEPT_ENCODING, HeaderValue::from_static("gzip, deflate, br"));
-    headers.insert(ACCEPT_LANGUAGE, HeaderValue::from_static("en-US,en;q=0.9"));
+    headers.insert(
+        ACCEPT,
+        HeaderValue::from_static("text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.9")
+    );
+    headers.insert(
+        ACCEPT_LANGUAGE,
+        HeaderValue::from_static("en-US,en;q=0.9")
+    );
+    headers
+}
 
-    let client = Client::builder().default_headers(headers).build()?;
+
+#[tokio::main]
+async fn main() -> Result<(), Box<dyn Error>> {
+    let url = "https://open.spotify.com/playlist/10Wgl6LQiT5zr3hqRVmunQ?si=1cf93377485a4228";
+    //let url = "https://open.spotify.com/album/6hPkbAV3ZXpGZBGUvL6jVM";
+    let spotify_html = get_html_from_url(&url).await?;
+    let page_tracks = get_tracks_from_html(&spotify_html);
+    let binding = &page_tracks.unwrap();
+    let track_data = get_track_data(binding).await;
+    println!("{:?}", &track_data);
+    download_videos(&track_data.unwrap()).await;
+
+    Ok(())
+}
+
+
+// GET a URL and return the response as parsed HTML
+async fn get_html_from_url(url: &str) -> Result<Html, Box<dyn Error>> {
+    let client = Client::builder()
+        .default_headers(create_headers())
+        .build()?;
     let resp = client.get(url).send().await?;
     let html = resp.text().await.unwrap();
-
     let parsed_html = Html::parse_document(&html);
-    //println!("{:?}", html);
+
     return Ok(parsed_html);
 }
 
-async fn get_track_data(tracks: &Vec<String>) -> Result<Vec<String>, Box<dyn Error>> {
-    //let track_data = get_spotify_data(&tracks[0]);
-    //println!("{:?}", track_data)
-    let mut track_list = Vec::new();
-    let meta_selector = Selector::parse("meta").unwrap();
-    for track in tracks {
-        let track_html = get_spotify_data(&track).await?;
-        let meta_elements = track_html.select(&meta_selector).collect::<Vec<_>>();
-        
-        let mut title:String = "".to_string();
-        let mut artist:String = "".to_string();
-        //let mut album:String;
 
-        for element in meta_elements {
-            if let (Some(content), Some(property)) = (element.value().attr("content"), element.value().attr("property")) {
-                if property == "og:title" {
-                    title = content.to_string();
-                }
-                else if property == "og:description" {
-                    artist = content.split("·").next().unwrap().trim().to_string();
-                }
-            }
-        }
-        if !artist.is_empty() && !title.is_empty() {
-            let query = format!("{} {} {}", title, artist, "audio");
-            let url = get_youtube_url(query).await?;
-            
-            track_list.push(url);
-        }
-    }
-    return Ok(track_list);
-}
-
-fn get_tracks(parsed_html: &Html) -> Result<Vec<String>, Box<dyn Error>> {
+fn get_tracks_from_html(parsed_html: &Html) -> Result<Vec<String>, Box<dyn Error>> {
     let meta_selector = Selector::parse("meta").unwrap();
     let meta_elements = parsed_html.select(&meta_selector).collect::<Vec<_>>();
     
@@ -103,78 +79,127 @@ fn get_tracks(parsed_html: &Html) -> Result<Vec<String>, Box<dyn Error>> {
 }
 
 
-async fn get_youtube_url(query: String) -> Result<String, Box<dyn std::error::Error>> {
-    let mut headers = HeaderMap::new();
-    headers.insert(
-        USER_AGENT,
-        HeaderValue::from_static("Mozilla/5.0 (Macintosh; Intel Mac OS X x.y; rv:42.0) Gecko/20100101 Firefox/42.0")
-    );
-    headers.insert(ACCEPT, HeaderValue::from_static("text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.9"));
-    //headers.insert(ACCEPT_ENCODING, HeaderValue::from_static("gzip, deflate, br"));
-    headers.insert(ACCEPT_LANGUAGE, HeaderValue::from_static("en-US,en;q=0.9"));
+// Get track information (title, artist, YouTube URL) for each track in the given list
+async fn get_track_data(tracks: &Vec<String>) -> Result<Vec<String>, Box<dyn Error>> {
+    let mut track_list = Vec::new();
+    let selector = Selector::parse("meta").unwrap();
 
-    let client = Client::builder().default_headers(headers).build()?;
-    let response = client.get(&url).send().await?;
-    let html = response.text().await.unwrap();
+    for track in tracks {
+        let html = get_html_from_url(&track).await?;
+        let elements = html.select(&selector).collect::<Vec<_>>();
 
-    //let html = response.text()?;
-    let parsed_html = Html::parse_document(&html);
-    
-    let selector = Selector::parse("script").unwrap();
-    //let mut video_urls = Vec::new();
+        let (mut title, mut artist) = ("".to_string(), "".to_string());
 
-    //let urls: Vec<String> = parsed_html
-    //    .select(&selector)
-    //    .map(|element| element.value().attr("href").unwrap().to_string())
-    //    .collect();
-
-    //println!("{:#?}", urls);
-
-    let variable_name = "ytInitialData";
- 
-     let mut video_url: String = "".to_string();
-
-     for element in parsed_html.select(&selector) {
-
-        let script_text = element.text().collect::<Vec<_>>().join("");
-        if script_text.contains(&format!("var {} = ", variable_name)) {
-
-            let start_delimiter = '{';
-            let end_delimiter = '}';
-
-            // Find the starting index of the JSON object
-            let start_index = match script_text.find(start_delimiter) {
-                Some(script_text) => script_text,
-                None => todo!()
-                //None => return, // or handle the error
-            };
-
-            // Find the ending index of the JSON object
-            let end_index = match script_text.rfind(end_delimiter) {
-                Some(script_text) => script_text,
-                None => todo!()
-                //None => return, // or handle the error
-            };
-
-            let json_str = &script_text[start_index..=end_index];
-
-            let parsed: Value = serde_json::from_str(&json_str)?;
-
-            if let Some(video_id) = parsed["contents"]["twoColumnSearchResultsRenderer"]["primaryContents"]["sectionListRenderer"]["contents"]
-                .get(0)
-                .and_then(|content| content["itemSectionRenderer"]["contents"].get(0))
-                .and_then(|item_content| item_content["videoRenderer"]["videoId"].as_str())
-            {
-                video_url = format!("https://www.youtube.com/watch?v={}", video_id);
-                println!("{}", video_url);
-                break;
+        for element in elements {
+            if let (Some(content), Some(property)) = (element.value().attr("content"), element.value().attr("property")) {
+                if property == "og:title" {
+                    title = content.to_string();
+                } else if property == "og:description" {
+                    artist = content.split("·").next().unwrap().trim().to_string();
+                }
             }
         }
+
+        if !artist.is_empty() && !title.is_empty() {
+            let query = format!("{} {} {}", title, artist, "audio");
+            println!("Looking up \"{}\" on YouTube", query);
+            let url = get_youtube_url(query).await?;
+            track_list.push(url);
+        }
     }
-
-    return Ok(video_url);
-
+    Ok(track_list)
 }
 
+// Get and parse the HTML from youtube search results
+async fn get_youtube_url(query: String) -> Result<String, Box<dyn Error>> {
+    let url = format!("https://www.youtube.com/results?search_query={}", query);
+    let html = reqwest::get(&url)
+        .await
+        .map_err(|err| format!("Error fetching YouTube results: {}", err))?
+        .text()
+        .await
+        .map_err(|err| format!("Error reading YouTube response: {}", err))?;
 
+    let parsed_html = Html::parse_document(&html);
+    let selector = Selector::parse("script").unwrap();
+
+    let variable_name = "ytInitialData";
+    let video_url = parsed_html
+        .select(&selector)
+        .filter_map(|element| {
+            let script_text = element.text().collect::<Vec<_>>().join("");
+            if script_text.contains(&format!("var {} = ", variable_name)) {
+                let start_index = script_text
+                    .find('{')
+                    .ok_or_else(|| format!("Error parsing JSON from script")).ok()?;
+
+                let end_index = script_text
+                    .rfind('}')
+                    .ok_or_else(|| format!("Error parsing JSON from script")).ok()?;
+
+                let json_str = &script_text[start_index..=end_index];
+                let parsed: Value = serde_json::from_str(&json_str)
+                    .map_err(|err| format!("Error parsing JSON from script: {}", err)).ok()?;
+
+                if let Some(video_id) = parsed["contents"]["twoColumnSearchResultsRenderer"]["primaryContents"]["sectionListRenderer"]["contents"]
+                    .get(0)
+                    .and_then(|content| content["itemSectionRenderer"]["contents"].get(0))
+                    .and_then(|item_content| item_content["videoRenderer"]["videoId"].as_str())
+                {
+                    println!("{:?}", format!("https://www.youtube.com/watch?v={}", video_id));
+                    return Some(format!("https://www.youtube.com/watch?v={}", video_id));
+                }
+            }
+
+            None
+        })
+        .next()
+        .ok_or_else(|| format!("No video found for query: {}", query))?;
+
+    Ok(video_url)
+}
+
+// 
+async fn download_videos(urls: &Vec<String>) {
+    for video_url in urls {
+        // let video_url = "https://www.youtube.com/watch?v=FZ8BxMU3BYc"; // FZ8BxMU3BYc works too!
+        let video = Video::new(video_url).unwrap();
+
+
+        // Do what you want with video buffer vector
+        let video_download_buffer = video.download().await;
+        //dprintln!("{:#?}",video_download_buffer);
+
+        // Or with options
+        let video_options = VideoOptions {
+          quality: VideoQuality::Lowest,
+          filter: VideoSearchOptions::Audio,
+          ..Default::default()
+        };
+
+
+        let video_info = video.get_info().await.unwrap();
+        let format = choose_format(&video_info.formats, &video_options);
+        println!("{:?}", format);
+
+
+        let video = Video::new_with_options(video_url, video_options).unwrap();
+        let video_download_buffer = video.download().await.unwrap();
+
+        // Create a new file and open it for writing
+        let mut file = match File::create(format!("{}.mp3", video_url)) {
+            Ok(file) => file,
+            Err(error) => {
+                println!("Error creating file: {:?}", error);
+                return;
+            }
+        };
+
+        // Write the video buffer to the file
+        match file.write_all(&video_download_buffer) {
+            Ok(()) => println!("File written successfully"),
+            Err(error) => println!("Error writing file: {:?}", error),
+        };
+    }
+}
 
