@@ -1,19 +1,19 @@
 use reqwest::Client;
-use reqwest::header::{HeaderMap, HeaderValue, ACCEPT, ACCEPT_ENCODING, ACCEPT_LANGUAGE, USER_AGENT};
+use reqwest::header::{HeaderMap, HeaderValue, ACCEPT, /*ACCEPT_ENCODING,*/ ACCEPT_LANGUAGE, USER_AGENT};
 use scraper::{Html, Selector};
 use serde_json::Value;
 use std::error::Error;
-use tokio::main;
+//use tokio::main;
 use std::fs::File;
 use std::io::prelude::*;
-use std::process::Command;
+//use std::process::Command;
 use rusty_ytdl::Video;
-use rusty_ytdl::{choose_format, VideoOptions, VideoQuality, VideoSearchOptions };
+use rusty_ytdl::{/*choose_format,*/ VideoOptions, VideoQuality, VideoSearchOptions };
 
 struct Song {
     title: String,
     artist: String,
-    album: String,
+    //album: String,
     url: String,
 }
 
@@ -43,7 +43,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
     let page_tracks = get_tracks_from_html(&spotify_html);
     let binding = &page_tracks.unwrap();
     let track_data = get_track_data(binding).await;
-    println!("{:?}", &track_data);
+    //println!("{}", &track_data);
     download_videos(&track_data.unwrap()).await;
 
     Ok(())
@@ -80,15 +80,23 @@ fn get_tracks_from_html(parsed_html: &Html) -> Result<Vec<String>, Box<dyn Error
 
 
 // Get track information (title, artist, YouTube URL) for each track in the given list
-async fn get_track_data(tracks: &Vec<String>) -> Result<Vec<String>, Box<dyn Error>> {
-    let mut track_list = Vec::new();
+async fn get_track_data(tracks: &Vec<String>) -> Result<Vec<Song>, Box<dyn Error>> {
+    let mut track_list: Vec<Song> = Vec::new();
     let selector = Selector::parse("meta").unwrap();
 
     for track in tracks {
         let html = get_html_from_url(&track).await?;
         let elements = html.select(&selector).collect::<Vec<_>>();
 
-        let (mut title, mut artist) = ("".to_string(), "".to_string());
+        let (
+          mut title, 
+          mut artist, 
+          //mut album
+        ) = (
+          "".to_string(), 
+          "".to_string(), 
+          //"".to_string()
+        ); // why am i this way?
 
         for element in elements {
             if let (Some(content), Some(property)) = (element.value().attr("content"), element.value().attr("property")) {
@@ -104,7 +112,16 @@ async fn get_track_data(tracks: &Vec<String>) -> Result<Vec<String>, Box<dyn Err
             let query = format!("{} {} {}", title, artist, "audio");
             println!("Looking up \"{}\" on YouTube", query);
             let url = get_youtube_url(query).await?;
-            track_list.push(url);
+
+            let song = Song {
+                title,
+                artist,
+                //album,
+                url,
+            };
+            track_list.push(song);
+
+            //track_list.push(url);
         }
     }
     Ok(track_list)
@@ -160,44 +177,50 @@ async fn get_youtube_url(query: String) -> Result<String, Box<dyn Error>> {
 }
 
 // 
-async fn download_videos(urls: &Vec<String>) {
-    for video_url in urls {
-        // let video_url = "https://www.youtube.com/watch?v=FZ8BxMU3BYc"; // FZ8BxMU3BYc works too!
-        let video = Video::new(video_url).unwrap();
+async fn download_videos(songs: &Vec<Song>) {
+    for song in songs.iter() {
+        //let video = Video::new(&song.url).unwrap();
 
+        println!("Song title: {}", &song.title);
+        println!("Song artist: {}", &song.artist);
 
-        // Do what you want with video buffer vector
-        let video_download_buffer = video.download().await;
-        //dprintln!("{:#?}",video_download_buffer);
-
+        //println!("{:?}", VideoQuality);
+        
         // Or with options
         let video_options = VideoOptions {
-          quality: VideoQuality::Lowest,
+          quality: VideoQuality::Highest,
           filter: VideoSearchOptions::Audio,
           ..Default::default()
         };
 
+        //let video_info = video.get_info().await.unwrap();
+        //let format = choose_format(&video_info.formats, &video_options);
+        //println!("FORMAT:: {:?}", format);
 
-        let video_info = video.get_info().await.unwrap();
-        let format = choose_format(&video_info.formats, &video_options);
-        println!("{:?}", format);
-
-
-        let video = Video::new_with_options(video_url, video_options).unwrap();
+        let video = Video::new_with_options(&song.url, video_options).unwrap();
         let video_download_buffer = video.download().await.unwrap();
 
         // Create a new file and open it for writing
-        let mut file = match File::create(format!("{}.mp3", video_url)) {
+        let file_name = format!("{}/{}/{}.mp3", "music_downloads", &song.artist, &song.title);
+        //let mut file = match File::create(format!("{}.mp3", &song.title)) {
+        let mut file = match File::create(&file_name) {
             Ok(file) => file,
             Err(error) => {
-                println!("Error creating file: {:?}", error);
-                return;
+                // Create the directory if not exists.
+                // This syntax looks insane???
+                if let std::io::ErrorKind::NotFound = error.kind() {
+                    std::fs::create_dir_all(std::path::Path::new(&file_name).parent().unwrap()).unwrap();
+                    File::create(&file_name).unwrap()
+                } else {
+                    println!("Error creating file: {:?}", error);
+                    return;
+                }
             }
         };
 
         // Write the video buffer to the file
         match file.write_all(&video_download_buffer) {
-            Ok(()) => println!("File written successfully"),
+            Ok(()) => println!("File written successfully: {}", &file_name),
             Err(error) => println!("Error writing file: {:?}", error),
         };
     }
